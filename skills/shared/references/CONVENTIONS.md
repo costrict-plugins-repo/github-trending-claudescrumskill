@@ -1,0 +1,305 @@
+# Project Management Conventions
+
+This document defines the shared standards used across all project management skills.
+All PM skills reference this file — update it here and changes propagate everywhere.
+
+## GitHub Project Structure
+
+### Project Board Custom Fields
+
+Every GitHub Project board MUST include these custom fields:
+
+| Field | Type | Values | Purpose |
+|-------|------|--------|---------|
+| Status | Single select | `Backlog`, `Ready`, `In Progress`, `In Review`, `Done` | Kanban workflow state |
+| Sprint | Iteration | 2-week cycles (configurable) | Sprint assignment |
+| Priority | Single select | `P0-Critical`, `P1-High`, `P2-Medium`, `P3-Low` | Triage priority |
+| Executor | Single select | `claude`, `human`, `cowork` | Who works this story |
+| Story Points | Number | 1, 2, 3, 5, 8, 13 | Fibonacci estimation |
+
+**Note:** Epics are tracked via `epic:*` labels (visibility) and native GitHub Milestones (progress tracking) — no custom field needed.
+
+### Project Board Views
+
+Create these views on every project board:
+
+1. **Current Sprint** — Filter: Sprint = current iteration, Group by: Status
+2. **Claude Queue** — Filter: Executor = claude AND Status = Ready, Sort by: Priority
+3. **My Tasks** — Filter: Executor = human, Group by: Sprint
+4. **Backlog** — Filter: Status = Backlog, Sort by: Priority
+5. **Epic Overview** — Group by: Milestone, Sort by: Priority
+
+## Label Taxonomy
+
+### Epic Labels (created per-epic)
+
+- `epic:<slug>` — One label per epic, applied to every issue in that epic (e.g., `epic:core-api`, `epic:security-hardening`)
+- Color: `#7057ff` (purple) for all epic labels
+- Epic labels provide at-a-glance identification and easy filtering on issues and project views
+- Milestones provide the progress tracking (open/closed counts, % complete) behind the scenes
+
+### Executor Labels (REQUIRED on every story)
+
+- `executor:claude` — Claude Code handles implementation autonomously
+- `executor:human` — Requires human judgment, decision-making, or external action
+- `executor:cowork` — Lighter tasks suitable for Cowork/Chrome agent (research, drafts, web tasks)
+
+### Status Signal Labels
+
+- `ready-for-work` — Fully specced, unblocked, ready to pick up
+- `needs-context` — Missing information; cannot begin until resolved
+- `blocked` — Dependent on another issue (MUST link blocking issue)
+- `deferred` — Intentionally pushed to a future sprint
+
+### Type Labels
+
+- `type:story` — A user-facing feature or capability
+- `type:bug` — Defect in existing functionality
+- `type:spike` — Research/exploration task with defined timebox
+- `type:infra` — Infrastructure, CI/CD, tooling, DevOps
+- `type:chore` — Maintenance, cleanup, refactoring, documentation
+- `type:design-spike` — Research-driven epic that produces design artifacts (ADR + per-implementation-epic CONTEXT.md files) consumed by implementation epics. Auto-injected by `/project-scaffold` for large/multi-epic PRDs; see Epic Structure → Design-Spike Epic.
+
+### Priority Labels
+
+- `P0-critical` — Blocking release, security issue, or data loss risk
+- `P1-high` — Core functionality for the current epic
+- `P2-medium` — Important but not blocking
+- `P3-low` — Nice-to-have, polish, optimization
+
+### Persona Labels
+
+Persona labels control the posture of the subagent that executes the story
+during orchestration. See `PERSONAS.md` for full preamble definitions.
+
+| Label | Color | Meaning |
+|---|---|---|
+| *(no persona label)* | — | Default `impl` — standard implementation posture |
+| `persona:ops` | `#1D76DB` | Ops/infra — emphasizes idempotency, rollback, blast radius |
+| `persona:research` | `#D4C5F9` | Research — output is a document (ADR/RFC), not code |
+| `source:review` | `#BFDADC` | Issue was created from automated review findings |
+
+Persona labels are optional. Stories without a persona label use the `impl`
+posture. The `review` persona is not assigned to stories — it runs
+automatically as a release gate.
+
+## Branch Strategy
+
+### Branch Naming
+
+- **Main branch:** `main` — production-ready code, human-only write access
+- **Development branch:** `development` — integration branch, gh token has full access
+- **Release branches:** `release/<epic-slug>` (e.g., `release/core-api`, `release/security-hardening`)
+- **Story branches:** `story/<epic-slug>/<story-slug>` (e.g., `story/core-api/user-auth-endpoint`) — story slugs are unique within an epic, not across the backlog, so the epic namespace is what keeps two epics running at once from driving one ref
+- **Spike branches:** `spike/<issue-number>-<short-slug>`
+- **Bug fix branches:** `fix/<issue-number>-<short-slug>`
+
+### Three-Tier Merge Strategy
+
+```
+main (human-only — gh token has NO write access)
+ └── development (gh token has full access — sprint approval gate)
+      └── release/core-api (epic release branch)
+           ├── story/core-api/init-project-structure
+           ├── story/core-api/database-schema
+           ├── story/core-api/auth-endpoints
+           └── story/core-api/user-crud
+```
+
+- **Story → Release branch:** Auto-merge when CI passes. No human review required.
+- **Release → development:** Human review required. This is the sprint approval gate.
+- **Development → main:** Human-initiated only. This is the production release gate.
+- Story PRs target the release branch, NOT development or main.
+- Release PR to development includes a sprint summary (auto-generated by sprint-release skill).
+- Production PRs from development → main are opened manually when ready to ship.
+
+### Branch Lifecycle & Cleanup
+
+The skill that creates branches is NOT necessarily the skill that cleans them up. `project-scaffold` and `sprint-plan` create release and story branches. `sprint-release` is responsible for cleaning up any that are fully merged into `development` by the time it runs. This prevents branch sprawl regardless of which execution pattern was used during the sprint.
+
+**Cleanup rules:**
+- Never delete `main` or `development`
+- Only delete branches fully merged into `development`
+- Do not delete unmerged release branches (they have pending work)
+- Report all deletions in the release summary
+
+### Approval Layers
+
+| Merge | Reviewer | Trigger |
+|-------|----------|---------|
+| Story → Release | CI only (auto-merge) | Claude completes a story |
+| Release → Development | Human (sprint review) | `/sprint-release` opens PR |
+| Development → Main | Human (production gate) | Manual — when ready to ship |
+
+### Branch Protection Rules
+
+**main:**
+- Require PR reviews: minimum 1 (the human executive)
+- Require status checks to pass
+- No force pushes, no deletions
+- gh PAT does NOT have write access — not listed as bypass actor
+- Only the human can merge to main
+
+**development:**
+- Require status checks to pass
+- Require PR reviews for release branch merges (sprint review gate)
+- Allow the gh PAT to create PRs targeting this branch
+- No force pushes
+
+**release/* branches:**
+- Require status checks to pass
+- Allow auto-merge when CI passes (story PRs land here)
+- No required reviewers (CI is the quality gate)
+
+### Token Access Scope
+
+The fine-grained GitHub PAT used by Claude Code should have:
+- Read/write access to `development` and `release/*` branches
+- NO write access to `main`
+- This ensures that even if the token is compromised, production code is untouched
+
+## Issue Template
+
+Use this template for every story/task issue:
+
+```markdown
+## Objective
+[What this accomplishes — one clear sentence]
+
+## Acceptance Criteria
+- [ ] [Specific, testable criterion]
+- [ ] [Specific, testable criterion]
+- [ ] [Specific, testable criterion]
+
+## Technical Context
+[Architecture notes, relevant files, API contracts, approach guidance.
+For executor:claude — be specific about code paths, patterns, and test expectations.
+For executor:human — explain why this needs human judgment and what decisions are needed.]
+
+## Dependencies
+- **Blocked by:** [#issue or "none"]
+- **Blocks:** [#issue or "none"]
+```
+
+## Epic Structure
+
+Each epic is tracked two ways:
+
+1. **`epic:<slug>` label** — visible on every issue for at-a-glance identification and filtering
+2. **GitHub Milestone** — powers progress tracking (open/closed counts, % complete bar)
+
+Both are set at issue creation time. The label is what scrum teams see day-to-day; the milestone is what drives metrics.
+
+- Epic (milestone) title format: `<Epic Name>` (e.g., `Core API`, `Security Hardening`, `Encrypted Journal`)
+- Epic label format: `epic:<slug>` (e.g., `epic:core-api`, `epic:security-hardening`, `epic:encrypted-journal`)
+- Epic description: Summary of the body of work from the PRD or spec
+- Epic due date: Derived from sprint cadence and story point estimates
+- Stories are assigned to both the epic label and the milestone
+
+**Backward compatibility:** Existing milestones named `Phase N: <Name>` are treated as epics without renaming. If an existing project has no `epic:*` labels, the skills create them when adding new stories.
+
+### Design-Spike Epic
+
+A **design-spike epic** is a research-driven pre-epic that produces written design artifacts before any implementation work begins. It auto-injects at the head of the project when triggered, giving every subsequent implementation subagent a shared anchor for naming, file layout, types, and patterns.
+
+**When it auto-injects:**
+
+- Two-pass scaffolding was triggered AND the resulting skeleton has more than one implementation epic, OR
+- PRD frontmatter contains `design_spike: true`, OR
+- User explicitly passes `--design-spike` to `/project-scaffold`.
+
+`design_spike: false` in PRD frontmatter suppresses the epic even when other triggers fire. The global enable switch is `scaffold.design_spike_enabled` in `config.json` (default `true`).
+
+**What it contains:**
+
+- One ADR-authoring story (`persona: research`, `executor: claude`) producing the project's foundational ADR at `<paths.adr>/NNNN-<slug>.md`.
+- One CONTEXT.md-authoring story per implementation epic (`persona: research`, `executor: claude`) producing `<paths.context>/<epic-slug>/CONTEXT.md` from the shared template at `skills/shared/templates/CONTEXT-template.md`.
+
+**How it gates implementation:**
+
+Every implementation story receives a `blocked_by` reference to the design-spike story that produces its epic's CONTEXT.md. Sprint planning then naturally excludes implementation stories until the design-spike epic completes — no special gate logic required, the existing dependency mechanism handles it.
+
+**Where artifacts live:**
+
+ADR and CONTEXT.md files are committed to the `development` branch via the filesystem in ALL four backends (local, GitHub, Jira, Trello). Git is the universal substrate; remote backends additionally surface links via milestone/epic descriptions but the committed files are the single source of truth.
+
+**Detection signal:**
+
+The canonical signal that an epic is a design-spike is the `type:design-spike` label (GitHub/Trello) or `epic_type: design-spike` frontmatter field (local). The default epic title is "Architecture & Design" but the title is not load-bearing — detection always uses the label/field, never the title.
+
+## Frontmatter Fields (Local Mode)
+
+In local-mode backlogs (`scaffolding: "local"`), epic and story files use YAML frontmatter for metadata. Beyond the per-file fields documented in their respective templates, these fields apply to the epic-level `_epic.md`:
+
+| Field | Type | Allowed Values | Purpose |
+|-------|------|----------------|---------|
+| `title` | string | any | Display name of the epic |
+| `slug` | string | kebab-case | Directory name and ID |
+| `status` | string | `open`, `closed` | Epic completion state |
+| `created` | string | ISO timestamp | Creation time |
+| `epic_type` | string | `design-spike` (omit for implementation epics) | Marks the epic as the design-spike pre-epic for detection by orchestration |
+
+Absence of `epic_type` means a standard implementation epic — this preserves backward compatibility with existing `_epic.md` files.
+
+### PRD Document Frontmatter
+
+PRD/spec documents (passed to `/project-scaffold` or `/project-orchestrate`) may declare an optional `depends_on` field at the top of the document. The field is consumed by `/project-orchestrate` when running in sequential multi-path mode to determine inter-spec execution order — see `project-orchestrate/SKILL.md` → Input Parsing and Mode Detection → Dependency Resolution for the full algorithm.
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `depends_on` | list of strings | Other specs in the same multi-path invocation that must complete before this one. Each entry is either a path (relative to this spec's directory) or a basename matching another spec in the argument list. Absence of the field means no inter-spec constraint — execution falls back to argument order. |
+
+Example:
+
+```yaml
+---
+title: My Spec
+depends_on:
+  - other-spec.md            # basename match against other args
+  - subdir/another-spec.md   # path match relative to this spec's directory
+---
+```
+
+`depends_on` is parallel in spirit to the story-level `blocked_by` field, but operates at the spec level. `/project-orchestrate` resolves the dependency graph at run start (topological sort, stable tie-break on argument order) and aborts the run BEFORE any spec executes if a cycle or missing dependency is detected. Cycles include self-references (`depends_on: [this-spec.md]`).
+
+The field is ignored in single-path orchestrate invocations and in `/project-scaffold` invocations — it only takes effect when 2+ existing-file paths are passed to `/project-orchestrate`.
+
+## Sprint Cadence
+
+- Default sprint length: **2 weeks** (configurable per project)
+- Sprint naming: `Sprint <N>` within the project's iteration field
+- An epic may span multiple sprints if the work exceeds one cycle
+- At sprint boundaries, incomplete stories roll to the next sprint with a `rolled-over` label
+
+## Story Point Guidelines
+
+| Points | Meaning | Example |
+|--------|---------|---------|
+| 1 | Trivial — config change, copy update | Update an env variable |
+| 2 | Small — single file, clear implementation | Add a validation rule |
+| 3 | Medium — multiple files, straightforward | New API endpoint with tests |
+| 5 | Large — cross-cutting, some unknowns | Auth system with middleware |
+| 8 | Very large — significant complexity | Database migration with data transform |
+| 13 | Epic-sized — should probably be split | Full feature module end-to-end |
+
+If a story estimates at 13, consider splitting it into smaller stories.
+
+## Executor Assignment Guidelines
+
+### Assign `executor:claude` when:
+- Implementation path is clear from acceptance criteria
+- Work is primarily code: new features, endpoints, tests, refactoring
+- No external approvals, account access, or human judgment needed
+- Dependencies are resolved (status is `ready-for-work`)
+
+### Assign `executor:human` when:
+- Requires external service signup, credentials, or account configuration
+- Involves business decisions, UX judgment calls, or stakeholder input
+- Needs access to systems Claude cannot reach (vendor portals, billing, etc.)
+- Requires physical-world action (hardware, meetings, approvals)
+
+### Assign `executor:cowork` when:
+- Research tasks: competitive analysis, documentation review
+- Content drafting: blog posts, documentation, emails
+- Web-based tasks: form submissions, data gathering from websites
+- File organization and cleanup tasks
